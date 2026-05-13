@@ -142,6 +142,9 @@ def train_step(
         loss = loss_fn(y_pred, y)
         train_loss += loss.item() 
 
+        # Gradient clipping
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+        
         # 3. Optimizer zero grad
         optimizer.zero_grad()
 
