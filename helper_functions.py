@@ -228,6 +228,7 @@ def train(
     epochs: int,
     writer: SummaryWriter,
     device: torch.device,
+    scheduler=None,
     checkpoint_dir: str = "checkpoints",
     checkpoint_metric: str = "accuracy"
 ) -> Dict[str, List[float]]:
@@ -237,7 +238,8 @@ def train(
     This function runs a full supervised training loop for a classification
     model. For each epoch, it performs one training step and one evaluation
     step, logs the resulting loss and accuracy values to TensorBoard, stores
-    the results in a dictionary, and optionally saves the best model checkpoint.
+    the results in a dictionary, optionally steps a learning rate scheduler,
+    and optionally saves the best model checkpoint.
 
     The function also automatically starts a TensorBoard server and exposes it
     through a Cloudflare tunnel by calling:
@@ -245,6 +247,12 @@ def train(
         start_tensorboard_tunnel(log_dir="runs", port=6008)
 
     before training begins.
+
+    Scheduler behavior:
+        - If scheduler is None, no scheduler is used.
+        - If scheduler is provided, it is stepped once per epoch.
+        - If scheduler is ReduceLROnPlateau, it is stepped using test_loss.
+        - The current learning rate is logged to TensorBoard after scheduler.step().
 
     Checkpointing behavior:
         - If checkpoint_metric="accuracy", the model is saved whenever test
@@ -272,14 +280,25 @@ def train(
             Number of complete passes through the training dataset.
 
         writer:
-            TensorBoard SummaryWriter used to log loss, accuracy, and the
-            model graph.
+            TensorBoard SummaryWriter used to log loss, accuracy, learning rate,
+            and the model graph.
 
         device:
             Target device where the model and tensors should be placed.
 
             Example:
                 torch.device("cuda") or torch.device("cpu")
+
+        scheduler:
+            Optional PyTorch learning rate scheduler.
+
+            Examples:
+                torch.optim.lr_scheduler.StepLR
+                torch.optim.lr_scheduler.CosineAnnealingLR
+                torch.optim.lr_scheduler.ReduceLROnPlateau
+
+            Defaults to:
+                None
 
         checkpoint_dir:
             Directory where best model checkpoints should be saved.
@@ -370,7 +389,7 @@ def train(
         )
 
         print(
-            f"Epoch: {epoch+1} | "
+            f"Epoch: {epoch + 1} | "
             f"train_loss: {train_loss:.4f} | "
             f"train_acc: {train_acc:.4f} | "
             f"test_loss: {test_loss:.4f} | "
@@ -394,6 +413,16 @@ def train(
             global_step=epoch
         )
 
+        # Step the learning rate scheduler if one was provided.
+        if scheduler is not None:
+            if isinstance(scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
+                scheduler.step(test_loss)
+            else:
+                scheduler.step()
+
+            current_lr = optimizer.param_groups[0]["lr"]
+            writer.add_scalar("Learning Rate", current_lr, global_step=epoch)
+
         writer.flush()
 
         if checkpoint_metric == "accuracy":
@@ -413,7 +442,8 @@ def train(
                 "train_acc": train_acc,
                 "test_loss": test_loss,
                 "test_acc": test_acc,
-                "optimizer_state_dict": optimizer.state_dict()
+                "optimizer_state_dict": optimizer.state_dict(),
+                "scheduler_state_dict": scheduler.state_dict() if scheduler is not None else None
             }
         )
 
